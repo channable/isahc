@@ -272,6 +272,7 @@ pub mod interceptor;
 pub(crate) mod interceptor;
 
 pub use crate::{
+    config::request::{SetOpt, NoCustomOpt},
     body::{AsyncBody, Body},
     client::{HttpClient, HttpClientBuilder, ResponseFuture},
     error::Error,

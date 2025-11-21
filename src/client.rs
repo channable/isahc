@@ -5,7 +5,7 @@ use crate::{
     body::{AsyncBody, Body},
     config::{
         client::ClientConfig,
-        request::{RequestConfig, SetOpt, WithRequestConfig},
+        request::{NoCustomOpt, RequestConfig, SetOpt, WithRequestConfig},
         *,
     },
     default_headers::DefaultHeadersInterceptor,
@@ -71,9 +71,9 @@ static USER_AGENT: Lazy<String> = Lazy::new(|| {
 /// # Ok::<(), isahc::Error>(())
 /// ```
 #[must_use = "builders have no effect if unused"]
-pub struct HttpClientBuilder {
+pub struct HttpClientBuilder<T: SetOpt> {
     agent_builder: AgentBuilder,
-    client_config: ClientConfig,
+    client_config: ClientConfig<T>,
     request_config: RequestConfig,
     interceptors: Vec<InterceptorObj>,
     default_headers: HeaderMap<HeaderValue>,
@@ -83,13 +83,13 @@ pub struct HttpClientBuilder {
     cookie_jar: Option<crate::cookies::CookieJar>,
 }
 
-impl Default for HttpClientBuilder {
+impl Default for HttpClientBuilder<NoCustomOpt> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl HttpClientBuilder {
+impl HttpClientBuilder<NoCustomOpt> {
     /// Create a new builder for building a custom client. All configuration
     /// will start out with the default values.
     ///
@@ -114,6 +114,75 @@ impl HttpClientBuilder {
         }
     }
 
+    /// Set custom curl options.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::ptr;
+    /// use std::error;
+    /// use std::fmt;
+    /// use std::mem;
+    /// use std::ffi;
+    ///
+    /// use isahc::{HttpClient, SetOpt, prelude::*};
+    ///
+    /// /// Helper functions for raising nice errors taken from the `curl` crate.
+    /// fn cvt<H>(easy: &mut curl::easy::Easy2<H>, rc: curl_sys::CURLcode) -> Result<(), curl::Error> {
+    ///     if rc == curl_sys::CURLE_OK {
+    ///         return Ok(());
+    ///     }
+    ///     let mut err = curl::Error::new(rc);
+    ///     if let Some(msg) = easy.take_error_buf() {
+    ///         err.set_extra(msg);
+    ///     }
+    ///     Err(err)
+    /// }
+    ///
+    /// /// Import the base function for the open socket callback from the `curl` crate.
+    /// extern "C" {
+    ///     pub fn opensocket_cb(data: *mut libc::c_void, purpose: curl_sys::curlsocktype, address: *mut curl_sys::curl_sockaddr) -> curl_sys::curl_socket_t;
+    /// }
+    ///
+    /// /// Wrap the callback to perform our custom logic before opening the socket.
+    /// extern "C" fn opensocket_cb_custom(data: *mut libc::c_void, purpose: curl_sys::curlsocktype, address: *mut curl_sys::curl_sockaddr) -> curl_sys::curl_socket_t {
+    ///     // TODO: Wrapper the open socket callback to perform some custom logic.
+    ///     unsafe { opensocket_cb(data, purpose, address) }
+    /// }
+    ///
+    /// /// Implement a custom curl option that modifies the open socket function.
+    /// #[derive(Debug)]
+    /// struct CustomOpt {}
+    /// impl SetOpt for CustomOpt {
+    ///     fn set_opt<H>(&self, easy: &mut curl::easy::Easy2<H>) -> Result<(), curl::Error> {
+    ///         let opt = curl_sys::CURLOPT_OPENSOCKETFUNCTION;
+    ///         let cb: curl_sys::curl_opensocket_callback = opensocket_cb_custom;
+    ///         unsafe { cvt(easy, curl_sys::curl_easy_setopt(easy.raw(), opt, cb))?; }
+    ///         Ok(())
+    ///     }
+    /// }
+    ///
+    /// let client = HttpClient::builder()
+    ///     .custom_curl_options(CustomOpt {})
+    ///     .build()?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn custom_curl_options<S: SetOpt>(self, custom_curl_options: S) -> HttpClientBuilder<S> {
+        // Similar to the dns_cache option, this operation actually affects all
+        // requests in a multi handle so we do not expose it per-request to
+        // avoid confusing behavior.
+        HttpClientBuilder{
+            agent_builder: self.agent_builder,
+            client_config: ClientConfig { connection_cache_ttl: self.client_config.connection_cache_ttl, close_connections: self.client_config.close_connections, dns_cache: self.client_config.dns_cache, dns_resolve: self.client_config.dns_resolve, custom_curl_options: Some(custom_curl_options), },
+            request_config: self.request_config,
+            interceptors: self.interceptors,
+            default_headers: self.default_headers,
+            error: self.error,
+        }
+    }
+}
+
+impl<T: SetOpt> HttpClientBuilder<T> {
     /// Enable persistent cookie handling for all requests using this client
     /// using a shared cookie jar.
     ///
@@ -436,7 +505,7 @@ impl HttpClientBuilder {
     ///
     /// If the client fails to initialize, an error will be returned.
     #[allow(unused_mut)]
-    pub fn build(mut self) -> Result<HttpClient, Error> {
+    pub fn build(mut self) -> Result<HttpClient<T>, Error> {
         if let Some(err) = self.error {
             return Err(err);
         }
@@ -483,7 +552,7 @@ impl HttpClientBuilder {
     }
 }
 
-impl Configurable for HttpClientBuilder {
+impl<T: SetOpt> Configurable for HttpClientBuilder<T> {
     #[cfg(feature = "cookies")]
     fn cookie_jar(mut self, cookie_jar: crate::cookies::CookieJar) -> Self {
         self.cookie_jar = Some(cookie_jar);
@@ -491,7 +560,7 @@ impl Configurable for HttpClientBuilder {
     }
 }
 
-impl WithRequestConfig for HttpClientBuilder {
+impl<T: SetOpt> WithRequestConfig for HttpClientBuilder<T> {
     #[inline]
     fn with_config(mut self, f: impl FnOnce(&mut RequestConfig)) -> Self {
         f(&mut self.request_config);
@@ -499,7 +568,7 @@ impl WithRequestConfig for HttpClientBuilder {
     }
 }
 
-impl fmt::Debug for HttpClientBuilder {
+impl<T: SetOpt> fmt::Debug for HttpClientBuilder<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HttpClientBuilder").finish()
     }
@@ -594,17 +663,24 @@ impl<'a, K: Copy, V: Copy> HeaderPair<K, V> for &'a (K, V) {
 ///
 /// See the documentation on [`HttpClientBuilder`] for a comprehensive look at
 /// what can be configured.
-#[derive(Clone)]
-pub struct HttpClient {
-    inner: Arc<Inner>,
+pub struct HttpClient<T: SetOpt> {
+    inner: Arc<Inner<T>>,
 }
 
-struct Inner {
+impl<T: SetOpt> Clone for HttpClient<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+struct Inner<T: SetOpt> {
     /// This is how we talk to our background agent thread.
     agent: agent::Handle,
 
     /// Client-wide request configuration.
-    client_config: ClientConfig,
+    client_config: ClientConfig<T>,
 
     /// Default request configuration to use if not specified in a request.
     request_config: RequestConfig,
@@ -617,7 +693,7 @@ struct Inner {
     cookie_jar: Option<crate::cookies::CookieJar>,
 }
 
-impl HttpClient {
+impl HttpClient<NoCustomOpt> {
     /// Create a new HTTP client using the default configuration.
     ///
     /// If the client fails to initialize, an error will be returned.
@@ -629,17 +705,19 @@ impl HttpClient {
     ///
     /// TODO: Stabilize.
     pub(crate) fn shared() -> &'static Self {
-        static SHARED: Lazy<HttpClient> =
+        static SHARED: Lazy<HttpClient<NoCustomOpt>> =
             Lazy::new(|| HttpClient::new().expect("shared client failed to initialize"));
 
         &SHARED
     }
 
     /// Create a new [`HttpClientBuilder`] for building a custom client.
-    pub fn builder() -> HttpClientBuilder {
+    pub fn builder() -> HttpClientBuilder<NoCustomOpt> {
         HttpClientBuilder::default()
     }
+}
 
+impl<T: SetOpt + 'static> HttpClient<T> {
     /// Get the configured cookie jar for this HTTP client, if any.
     ///
     /// # Availability
@@ -1064,16 +1142,14 @@ impl HttpClient {
 
         easy.signal(false)?;
 
-        let request_config = request
-            .extensions()
-            .get::<RequestConfig>()
-            .unwrap();
+        let request_config = request.extensions().get::<RequestConfig>().unwrap();
 
         request_config.set_opt(&mut easy)?;
         self.inner.client_config.set_opt(&mut easy)?;
 
         // Check if we need to disable the Expect header.
-        let disable_expect_header = request_config.expect_continue
+        let disable_expect_header = request_config
+            .expect_continue
             .as_ref()
             .map(|x| x.is_disabled())
             .unwrap_or_default();
@@ -1161,7 +1237,7 @@ impl HttpClient {
     }
 }
 
-impl crate::interceptor::Invoke for &HttpClient {
+impl<T: SetOpt + 'static> crate::interceptor::Invoke for &HttpClient<T> {
     fn invoke(
         &self,
         mut request: Request<AsyncBody>,
@@ -1236,7 +1312,7 @@ impl crate::interceptor::Invoke for &HttpClient {
     }
 }
 
-impl fmt::Debug for HttpClient {
+impl<T: SetOpt> fmt::Debug for HttpClient<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("HttpClient").finish()
     }
@@ -1275,12 +1351,12 @@ impl<'c> fmt::Debug for ResponseFuture<'c> {
 
 /// Response body stream. Holds a reference to the agent to ensure it is kept
 /// alive until at least this transfer is complete.
-struct ResponseBody {
+struct ResponseBody<T: SetOpt> {
     inner: ResponseBodyReader,
-    _client: HttpClient,
+    _client: HttpClient<T>,
 }
 
-impl AsyncRead for ResponseBody {
+impl<T: SetOpt> AsyncRead for ResponseBody<T> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -1319,8 +1395,8 @@ fn uri_to_string(uri: &http::Uri) -> String {
 mod tests {
     use super::*;
 
-    static_assertions::assert_impl_all!(HttpClient: Send, Sync);
-    static_assertions::assert_impl_all!(HttpClientBuilder: Send);
+    static_assertions::assert_impl_all!(HttpClient::<NoCustomOpt>: Send, Sync);
+    static_assertions::assert_impl_all!(HttpClientBuilder::<NoCustomOpt>: Send);
 
     #[test]
     fn test_default_header() {
@@ -1335,7 +1411,8 @@ mod tests {
 
     #[test]
     fn test_default_headers_mut() {
-        let mut builder = HttpClientBuilder::new().default_header("some-key", "some-value");
+        let mut builder =
+            HttpClientBuilder::new().default_header("some-key", "some-value");
         let headers_map = &mut builder.default_headers;
         assert!(headers_map.len() == 1);
 

@@ -2,6 +2,7 @@
 
 use super::{proxy::Proxy, *};
 use curl::easy::Easy2;
+use std::fmt::Debug;
 
 /// Base trait for any object that can be configured for requests, such as an
 /// HTTP request builder or an HTTP client.
@@ -12,9 +13,19 @@ pub trait WithRequestConfig: Sized {
 }
 
 /// A helper trait for applying a configuration value to a given curl handle.
-pub(crate) trait SetOpt {
+pub trait SetOpt: Debug + Send + Sync {
     /// Apply this configuration property to the given curl handle.
     fn set_opt<H>(&self, easy: &mut Easy2<H>) -> Result<(), curl::Error>;
+}
+
+/// An type marker that ensures that we carry no custom `SetOpt` code around.
+#[derive(Debug)]
+pub enum NoCustomOpt {}
+
+impl SetOpt for NoCustomOpt {
+    fn set_opt<H>(&self, _easy: &mut Easy2<H>) -> Result<(), curl::Error> {
+        Ok(())
+    }
 }
 
 // Define this struct inside a macro to reduce some boilerplate.

@@ -1,5 +1,5 @@
 use futures_lite::future::block_on;
-use isahc::{prelude::*, HttpClient, Request};
+use isahc::{HttpClient, Request, prelude::*};
 use std::{
     io::{self, Write},
     net::{Shutdown, TcpListener, TcpStream},

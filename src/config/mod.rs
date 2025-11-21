@@ -13,7 +13,7 @@
 // to update the client code to apply the option when configuring an easy
 // handle.
 
-use self::{proxy::Proxy, request::SetOpt};
+use self::{proxy::Proxy};
 use crate::{
     auth::{Authentication, Credentials},
     is_http_version_supported,
@@ -32,6 +32,7 @@ pub(crate) mod ssl;
 pub use dial::{Dialer, DialerParseError};
 pub use dns::{DnsCache, ResolveMap};
 pub use redirect::RedirectPolicy;
+pub use request::SetOpt;
 pub use ssl::{CaCertificate, ClientCertificate, PrivateKey, SslOption};
 
 /// Provides additional methods when building a request for configuring various
