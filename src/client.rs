@@ -1156,7 +1156,6 @@ impl<T: SetOpt + 'static> HttpClient<T> {
 
         // Set the HTTP method to use. Curl ties in behavior with the request
         // method, so we need to configure this carefully.
-        #[allow(indirect_structural_match)]
         match (request.method(), has_body) {
             // Normal GET request.
             (&http::Method::GET, false) => {
