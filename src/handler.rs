@@ -98,6 +98,13 @@ pub(crate) struct RequestHandler {
     /// invariants are upheld).
     handle: *mut CURL,
 
+    /// Custom socket opening function.
+    custom_open_socket: Option<fn (
+        family: libc::c_int,
+        socktype: libc::c_int,
+        protocol: libc::c_int,
+    ) -> Option<curl_sys::curl_socket_t>>,
+
     /// If true, do not warn about prematurely closed responses.
     pub(crate) disable_connection_reuse_log: bool,
 }
@@ -119,6 +126,11 @@ struct Shared {
 impl RequestHandler {
     /// Create a new request handler and an associated response future.
     pub(crate) fn new(
+        custom_open_socket: Option<fn (
+            family: libc::c_int,
+            socktype: libc::c_int,
+            protocol: libc::c_int,
+        ) -> Option<curl_sys::curl_socket_t>>,
         request_body: AsyncBody,
     ) -> (
         Self,
@@ -142,6 +154,7 @@ impl RequestHandler {
             response_trailer_writer: TrailerWriter::new(),
             metrics: None,
             handle: ptr::null_mut(),
+            custom_open_socket,
             disable_connection_reuse_log: false,
         };
 
@@ -628,6 +641,23 @@ impl curl::easy::Handler for RequestHandler {
         }
 
         true
+    }
+
+    /// Gets called by curl whenever it wants to open a new socket.
+    ///
+    /// If a custom socket opener has been provided, use that. Otherwise,
+    /// fall back to the default implementation.
+    fn open_socket(
+            &mut self,
+            family: libc::c_int,
+            socktype: libc::c_int,
+            protocol: libc::c_int,
+        ) -> Option<curl_sys::curl_socket_t> {
+        if let Some(open_socket) = self.custom_open_socket {
+            open_socket(family, socktype, protocol)
+        } else {
+            curl::easy::Handler::open_socket(self, family, socktype, protocol)
+        }
     }
 
     /// Gets called by curl whenever it wishes to log a debug message.

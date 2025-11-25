@@ -1,3 +1,4 @@
+use libc;
 use super::{
     dns::{DnsCache, ResolveMap},
     request::SetOpt,
@@ -10,6 +11,11 @@ pub(crate) struct ClientConfig {
     pub(crate) close_connections: bool,
     pub(crate) dns_cache: Option<DnsCache>,
     pub(crate) dns_resolve: Option<ResolveMap>,
+    pub(crate) custom_open_socket: Option<fn (
+        family: libc::c_int,
+        socktype: libc::c_int,
+        protocol: libc::c_int,
+    ) -> Option<curl_sys::curl_socket_t>>,
 }
 
 impl SetOpt for ClientConfig {

@@ -315,6 +315,50 @@ impl HttpClientBuilder {
         self
     }
 
+    /// Specify a custom callback used to open sockets for curl's connections.
+    ///
+    /// The provided function will be called with the socket `family`, `socktype`
+    /// and `protocol` parameters and should return an `Option<curl_sys::curl_socket_t>`
+    /// representing the newly opened socket; returning `None` indicates that
+    /// socket creation failed.
+    ///
+    /// This can be used to integrate custom socket creation logic (for example,
+    /// to set specific socket options, integrate with a platform networking API,
+    /// or use a custom network stack). The callback must be safe to call from
+    /// curl's internals.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use isahc::{prelude::*, HttpClient};
+    ///
+    /// fn custom_socket_opener(
+    ///     family: libc::c_int,
+    ///     socktype: libc::c_int,
+    ///     protocol: libc::c_int,
+    /// ) -> Option<curl_sys::curl_socket_t> {
+    ///     // Custom socket creation logic here.
+    ///     // For demonstration purposes, we'll just return None to indicate failure.
+    ///     None
+    /// }
+    ///
+    /// let client = HttpClient::builder()
+    ///     .custom_open_socket(custom_socket_opener)
+    ///     .build()?;
+    ///
+    /// // This will fail due to socket creation failure.
+    /// client.get("https://example.org").is_err();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn custom_open_socket(mut self, f: fn (
+        family: libc::c_int,
+        socktype: libc::c_int,
+        protocol: libc::c_int,
+    ) -> Option<curl_sys::curl_socket_t>) -> Self {
+        self.client_config.custom_open_socket = Some(f);
+        self
+    }
+
     /// Add a default header to be passed with every request.
     ///
     /// If a default header value is already defined for the given key, then a
@@ -1050,7 +1094,7 @@ impl HttpClient {
         let body = std::mem::take(request.body_mut());
         let has_body = !body.is_empty();
         let body_length = body.len();
-        let (handler, future) = RequestHandler::new(body);
+        let (handler, future) = RequestHandler::new(self.inner.client_config.custom_open_socket, body);
 
         let mut easy = curl::easy::Easy2::new(handler);
 
