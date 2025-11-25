@@ -51,12 +51,3 @@ pub trait Responder: Send + Sync + 'static {
     /// Respond to a request.
     fn respond(&self, ctx: &mut RequestContext<'_>);
 }
-
-/// Simple responder that returns a general response.
-pub struct DefaultResponder;
-
-impl Responder for DefaultResponder {
-    fn respond(&self, ctx: &mut RequestContext<'_>) {
-        ctx.send(Response::default());
-    }
-}
