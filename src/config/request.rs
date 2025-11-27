@@ -88,6 +88,9 @@ define_request_config! {
     ssl_options: Option<SslOption>,
     enable_metrics: Option<bool>,
 
+    // Used by handler
+    custom_open_socket: Option<CustomOpenSocket>,
+
     // Used by interceptors
     redirect_policy: Option<RedirectPolicy>,
     auto_referer: Option<bool>,

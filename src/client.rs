@@ -20,9 +20,8 @@ use futures_lite::{
     io::AsyncRead,
 };
 use http::{
+    Request, Response,
     header::{HeaderMap, HeaderName, HeaderValue},
-    Request,
-    Response,
 };
 use once_cell::sync::Lazy;
 use std::{
@@ -312,50 +311,6 @@ impl HttpClientBuilder {
         // requests in a multi handle so we do not expose it per-request to
         // avoid confusing behavior.
         self.client_config.dns_resolve = Some(map);
-        self
-    }
-
-    /// Specify a custom callback used to open sockets for curl's connections.
-    ///
-    /// The provided function will be called with the socket `family`, `socktype`
-    /// and `protocol` parameters and should return an `Option<curl_sys::curl_socket_t>`
-    /// representing the newly opened socket; returning `None` indicates that
-    /// socket creation failed.
-    ///
-    /// This can be used to integrate custom socket creation logic (for example,
-    /// to set specific socket options, integrate with a platform networking API,
-    /// or use a custom network stack). The callback must be safe to call from
-    /// curl's internals.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use isahc::{prelude::*, HttpClient};
-    ///
-    /// fn custom_socket_opener(
-    ///     family: libc::c_int,
-    ///     socktype: libc::c_int,
-    ///     protocol: libc::c_int,
-    /// ) -> Option<curl_sys::curl_socket_t> {
-    ///     // Custom socket creation logic here.
-    ///     // For demonstration purposes, we'll just return None to indicate failure.
-    ///     None
-    /// }
-    ///
-    /// let client = HttpClient::builder()
-    ///     .custom_open_socket(custom_socket_opener)
-    ///     .build()?;
-    ///
-    /// // This will fail due to socket creation failure.
-    /// client.get("https://example.org").is_err();
-    /// # Ok::<(), Box<dyn std::error::Error>>(())
-    /// ```
-    pub fn custom_open_socket(mut self, f: fn (
-        family: libc::c_int,
-        socktype: libc::c_int,
-        protocol: libc::c_int,
-    ) -> Option<curl_sys::curl_socket_t>) -> Self {
-        self.client_config.custom_open_socket = Some(f);
         self
     }
 
@@ -1092,9 +1047,11 @@ impl HttpClient {
     > {
         // Prepare the request plumbing.
         let body = std::mem::take(request.body_mut());
+        let request_config = request.extensions().get::<RequestConfig>().unwrap();
         let has_body = !body.is_empty();
         let body_length = body.len();
-        let (handler, future) = RequestHandler::new(self.inner.client_config.custom_open_socket, body);
+        let (handler, future) =
+            RequestHandler::new(request_config.custom_open_socket.clone(), body);
 
         let mut easy = curl::easy::Easy2::new(handler);
 
@@ -1108,16 +1065,12 @@ impl HttpClient {
 
         easy.signal(false)?;
 
-        let request_config = request
-            .extensions()
-            .get::<RequestConfig>()
-            .unwrap();
-
         request_config.set_opt(&mut easy)?;
         self.inner.client_config.set_opt(&mut easy)?;
 
         // Check if we need to disable the Expect header.
-        let disable_expect_header = request_config.expect_continue
+        let disable_expect_header = request_config
+            .expect_continue
             .as_ref()
             .map(|x| x.is_disabled())
             .unwrap_or_default();

@@ -2,6 +2,7 @@
 
 use crate::{
     body::AsyncBody,
+    config::open_socket::CustomOpenSocket,
     error::{Error, ErrorKind},
     metrics::Metrics,
     parsing::{parse_header, parse_status_line},
@@ -20,8 +21,7 @@ use std::{
     ffi::CStr,
     fmt,
     future::Future,
-    io,
-    mem,
+    io, mem,
     net::SocketAddr,
     os::raw::{c_char, c_long},
     pin::Pin,
@@ -99,11 +99,7 @@ pub(crate) struct RequestHandler {
     handle: *mut CURL,
 
     /// Custom socket opening function.
-    custom_open_socket: Option<fn (
-        family: libc::c_int,
-        socktype: libc::c_int,
-        protocol: libc::c_int,
-    ) -> Option<curl_sys::curl_socket_t>>,
+    custom_open_socket: Option<CustomOpenSocket>,
 
     /// If true, do not warn about prematurely closed responses.
     pub(crate) disable_connection_reuse_log: bool,
@@ -126,11 +122,7 @@ struct Shared {
 impl RequestHandler {
     /// Create a new request handler and an associated response future.
     pub(crate) fn new(
-        custom_open_socket: Option<fn (
-            family: libc::c_int,
-            socktype: libc::c_int,
-            protocol: libc::c_int,
-        ) -> Option<curl_sys::curl_socket_t>>,
+        custom_open_socket: Option<CustomOpenSocket>,
         request_body: AsyncBody,
     ) -> (
         Self,
@@ -551,7 +543,8 @@ impl curl::easy::Handler for RequestHandler {
                         if !self.disable_connection_reuse_log
                             && self.response_version < Some(http::Version::HTTP_2)
                         {
-                            tracing::info!("\
+                            tracing::info!(
+                                "\
                                 response dropped without fully consuming the response body, connection won't be reused\n\
                                 Aborting a response without fully consuming the response body can result in sub-optimal \
                                 performance. See https://github.com/sagebind/isahc/wiki/Connection-Reuse#closing-connections-early."
@@ -648,15 +641,39 @@ impl curl::easy::Handler for RequestHandler {
     /// If a custom socket opener has been provided, use that. Otherwise,
     /// fall back to the default implementation.
     fn open_socket(
-            &mut self,
-            family: libc::c_int,
-            socktype: libc::c_int,
-            protocol: libc::c_int,
-        ) -> Option<curl_sys::curl_socket_t> {
-        if let Some(open_socket) = self.custom_open_socket {
-            open_socket(family, socktype, protocol)
+        &mut self,
+        purpose: curl_sys::curlsocktype,
+        family: libc::c_int,
+        socktype: libc::c_int,
+        protocol: libc::c_int,
+        address_length: libc::c_uint,
+        #[cfg(unix)] address_data: libc::sockaddr,
+        #[cfg(windows)] address_data: SOCKADDR,
+    ) -> Option<curl_sys::curl_socket_t> {
+        if let Some(custom_open_socket) = &self.custom_open_socket {
+            custom_open_socket.open_socket(
+                purpose,
+                family,
+                socktype,
+                protocol,
+                address_length,
+                address_data,
+            )
         } else {
-            curl::easy::Handler::open_socket(self, family, socktype, protocol)
+            // Delegate to the trait's default implementation by using a helper
+            // type that doesn't override `open_socket`. That way we call the
+            // trait-provided default rather than recursively calling this impl.
+            struct DefaultOpenSocketHandler;
+            impl curl::easy::Handler for DefaultOpenSocketHandler {}
+            let mut default = DefaultOpenSocketHandler;
+            default.open_socket(
+                purpose,
+                family,
+                socktype,
+                protocol,
+                address_length,
+                address_data,
+            )
         }
     }
 
