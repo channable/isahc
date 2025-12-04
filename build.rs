@@ -3,6 +3,10 @@ use std::{env, error::Error};
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rustc-env=ISAHC_FEATURES={}", get_feature_string());
 
+    // Allow conditional compilation for tarpaulin and debug builds.
+    println!("cargo::rustc-check-cfg=cfg(tarpaulin)");
+    println!("cargo::rustc-check-cfg=cfg(debug)");
+
     Ok(())
 }
 

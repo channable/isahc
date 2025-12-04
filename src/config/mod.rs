@@ -24,6 +24,7 @@ use std::{net::IpAddr, time::Duration};
 pub(crate) mod client;
 pub(crate) mod dial;
 pub(crate) mod dns;
+pub(crate) mod open_socket;
 pub(crate) mod proxy;
 pub(crate) mod redirect;
 pub(crate) mod request;
@@ -31,6 +32,7 @@ pub(crate) mod ssl;
 
 pub use dial::{Dialer, DialerParseError};
 pub use dns::{DnsCache, ResolveMap};
+pub use open_socket::{CustomOpenSocket, OpenSocket};
 pub use redirect::RedirectPolicy;
 pub use ssl::{CaCertificate, ClientCertificate, PrivateKey, SslOption};
 
@@ -423,7 +425,7 @@ pub trait Configurable: request::WithRequestConfig {
     /// };
     /// use std::net::Ipv4Addr;
     ///
-    /// let request = Request::get("http://exmaple.org")
+    /// let request = Request::get("http://example.org")
     ///     // Actually issue the request to localhost on port 8080. The host
     ///     // header will remain unchanged.
     ///     .dial(Dialer::ip_socket((Ipv4Addr::LOCALHOST, 8080)))
@@ -438,6 +440,60 @@ pub trait Configurable: request::WithRequestConfig {
         self.with_config(move |config| {
             config.dial = Some(dialer.into());
         })
+    }
+
+    /// Specify a custom callback used to open sockets for curl's connections.
+    ///
+    /// The provided function will be called with the socket `purpose`,
+    /// `family`, `socktype`, `protocol`, `address_length` and `address_data`
+    /// parameters and should return an `Option<curl_sys::curl_socket_t>`
+    /// representing the newly opened socket; returning `None` indicates that
+    /// socket creation failed.
+    ///
+    /// This can be used to integrate custom socket creation logic (for example,
+    /// to set specific socket options, integrate with a platform networking
+    /// API, or use a custom network stack). The callback must be safe to call
+    /// from curl's internals.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use isahc::{prelude::*, HttpClient, config::{OpenSocket, CustomOpenSocket}};
+    /// use libc;
+    /// use http;
+    ///
+    /// #[derive(Debug)]
+    /// struct NoOpenSocket;
+    /// impl OpenSocket for NoOpenSocket {
+    ///     fn open_socket(
+    ///         &self,
+    ///         purpose: curl_sys::curlsocktype,
+    ///         family: libc::c_int,
+    ///         socktype: libc::c_int,
+    ///         protocol: libc::c_int,
+    ///         address_length: libc::c_uint,
+    ///         #[cfg(unix)] address_data: libc::sockaddr,
+    ///         #[cfg(windows)] address_data: windows_sys::Win32::Networking::WinSock::SOCKADDR,
+    ///     ) -> Option<curl_sys::curl_socket_t> {
+    ///         // Custom socket creation logic here.
+    ///         // For demonstration purposes, we'll just return None to indicate failure.
+    ///         None
+    ///     }
+    /// }
+    ///
+    /// let client = HttpClient::builder()
+    ///     .build()?;
+    ///
+    /// // This will fail due to socket creation failure.
+    /// let request = http::Request::get("https://example.org")
+    ///     .custom_open_socket(Arc::new(NoOpenSocket))
+    ///     .body(())?;
+    /// client.send(request).is_err();
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    fn custom_open_socket(self, open_socket: CustomOpenSocket) -> Self {
+        self.with_config(|rc| rc.custom_open_socket = Some(open_socket))
     }
 
     /// Set a proxy to use for requests.
@@ -867,9 +923,7 @@ impl NetworkInterface {
     /// Bind to whatever the networking stack finds suitable. This is the
     /// default behavior.
     pub fn any() -> Self {
-        Self {
-            interface: None,
-        }
+        Self { interface: None }
     }
 
     /// Bind to the interface with the given name (such as `eth0`). This method
@@ -1012,9 +1066,7 @@ impl ExpectContinue {
 
     /// Disable the use and handling of the `Expect` request header.
     pub const fn disabled() -> Self {
-        Self {
-            timeout: None,
-        }
+        Self { timeout: None }
     }
 
     pub(crate) fn is_disabled(&self) -> bool {
