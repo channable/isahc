@@ -2,12 +2,7 @@
 
 use futures_lite::io::{AsyncRead, BlockOn};
 use std::{
-    borrow::Cow,
-    fmt,
-    io::{self, Cursor, Read},
-    pin::Pin,
-    str,
-    task::{Context, Poll},
+    borrow::Cow, fmt, io::{self, Cursor, Read}, pin::Pin, str, task::{Context, Poll}
 };
 
 mod sync;

@@ -518,7 +518,7 @@ impl<K, V> HeaderPair<K, V> for (K, V) {
     }
 }
 
-impl<'a, K: Copy, V: Copy> HeaderPair<K, V> for &'a (K, V) {
+impl<K: Copy, V: Copy> HeaderPair<K, V> for &(K, V) {
     fn pair(self) -> (K, V) {
         (self.0, self.1)
     }

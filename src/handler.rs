@@ -30,7 +30,8 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-pub(crate) struct RequestBody(pub(crate) AsyncBody);
+#[derive(Clone)]
+pub(crate) struct RequestBody(pub(crate) Arc<AsyncBody>);
 
 /// Manages the state of a single request/response life cycle.
 ///
@@ -211,7 +212,7 @@ impl RequestHandler {
         debug_assert!(self.request_body_waker.is_none());
         debug_assert!(self.response_body_waker.is_none());
 
-        self.span.record("id", &id);
+        self.span.record("id", id);
         self.handle = handle;
         self.request_body_waker = Some(request_waker);
         self.response_body_waker = Some(response_waker);
@@ -287,7 +288,7 @@ impl RequestHandler {
 
         // Keep the request body around in case interceptors need access to
         // it. Otherwise we're just going to drop it later.
-        builder = builder.extension(RequestBody(mem::take(&mut self.request_body)));
+        builder = builder.extension(RequestBody(Arc::new(mem::take(&mut self.request_body))));
 
         // Include a handle to the trailer headers. We won't know if there
         // are any until we reach the end of the response body.
