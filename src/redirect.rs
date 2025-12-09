@@ -8,7 +8,7 @@ use crate::{
     request::RequestExt,
 };
 use http::{header::ToStrError, uri::Scheme, HeaderMap, HeaderValue, Request, Response, Uri};
-use std::{borrow::Cow, convert::TryFrom, fmt::Write, str};
+use std::{borrow::Cow, convert::TryFrom, fmt::Write, str, sync::Arc};
 use url::Url;
 
 /// How many redirects to follow by default if a limit is not specified. We
@@ -18,6 +18,7 @@ const DEFAULT_REDIRECT_LIMIT: u32 = 1024;
 
 /// Extension containing the final "effective" URI that was visited, after
 /// following any redirects.
+#[derive(Clone)]
 pub(crate) struct EffectiveUri(pub(crate) Uri);
 
 /// Interceptor that implements automatic following of HTTP redirects.
@@ -119,7 +120,7 @@ impl Interceptor for RedirectInterceptor {
                     let mut request_body = response
                         .extensions_mut()
                         .remove::<RequestBody>()
-                        .map(|v| v.0)
+                        .and_then(|v| Arc::into_inner(v.0))
                         .unwrap_or_default();
 
                     // Redirect handling is tricky when we are uploading something.
